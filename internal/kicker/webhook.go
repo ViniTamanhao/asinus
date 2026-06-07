@@ -41,7 +41,9 @@ func New(targetURL string, workerCount int) *Kicker {
 // Returns once all workers are running. Workers exit cleanly when ctx is cancelled.
 func (k *Kicker) Start(ctx context.Context) {
 	for i := 0; i < k.workerCount; i++ {
-		k.wg.Go(func() {
+		k.wg.Add(1)
+		go func() {
+			defer k.wg.Done()
 			for {
 				select {
 				case <-ctx.Done():
@@ -53,7 +55,7 @@ func (k *Kicker) Start(ctx context.Context) {
 					k.post(evt)
 				}
 			}
-		})
+		}()
 	}
 }
 

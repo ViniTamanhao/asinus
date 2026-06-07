@@ -11,19 +11,21 @@ import (
 	"sync"
 	"time"
 
+	"asinus/internal/aof"
 	"asinus/internal/store"
 )
 
 // Server holds a reference to the key-value store and manages TCP connections.
 type Server struct {
 	store    *store.Store
+	aof      *aof.AOF // nil if persistence is disabled
 	listener net.Listener
 	wg       sync.WaitGroup
 }
 
 // New creates a new Server backed by the given Store.
-func New(s *store.Store) *Server {
-	return &Server{store: s}
+func New(s *store.Store, a *aof.AOF) *Server {
+	return &Server{store: s, aof: a}
 }
 
 // Start begins listening on the given TCP port and accepts connections in a loop.
@@ -66,7 +68,7 @@ func (srv *Server) handleConnection(conn net.Conn) {
 		if line == "" {
 			continue
 		}
-		reply := srv.dispatch(line)
+		reply := srv.Dispatch(line)
 		fmt.Fprintln(conn, reply)
 	}
 	if err := scanner.Err(); err != nil {
@@ -74,9 +76,9 @@ func (srv *Server) handleConnection(conn net.Conn) {
 	}
 }
 
-// dispatch parses a single text command and executes it against the store;
+// Dispatch parses a single text command and executes it against the store;
 // Supported commands: GET, SET, DEL.
-func (srv *Server) dispatch(line string) string {
+func (srv *Server) Dispatch(line string) string {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return "-ERR empty command"
@@ -108,12 +110,26 @@ func (srv *Server) dispatch(line string) string {
 			ttl = time.Duration(sec) * time.Second
 		}
 		srv.store.Set(key, value, ttl)
+
+		if srv.aof != nil {
+			if err := srv.aof.Write(line); err != nil {
+				log.Printf("aof write error: %v", err)
+			}
+		}
+
 		return "+OK"
 	case "DEL":
 		if len(parts) != 2 {
 			return "-ERR wrong number of arguments for DEL"
 		}
 		srv.store.Delete(parts[1])
+
+		if srv.aof != nil {
+			if err := srv.aof.Write(line); err != nil {
+				log.Printf("aof write error: %v", err)
+			}
+		}
+
 		return "+OK"
 
 	default:

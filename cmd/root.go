@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"asinus/internal/aof"
 	"asinus/internal/kicker"
 	"asinus/internal/server"
 	"asinus/internal/store"
@@ -20,6 +21,7 @@ var (
 	port    string
 	webhook string
 	workers int
+	aofPath string
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +38,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&port, "port", "p", "6379", "port to listen on")
 	rootCmd.PersistentFlags().StringVarP(&webhook, "webhook", "w", "", "webhook to call on expire")
 	rootCmd.PersistentFlags().IntVarP(&workers, "workers", "j", 5, "number of workers")
+	rootCmd.PersistentFlags().StringVarP(&aofPath, "aof", "a", "", "AOF file path for persistence (empty = disabled)")
 }
 
 func run(cmd *cobra.Command, args []string) {
@@ -52,12 +55,33 @@ func run(cmd *cobra.Command, args []string) {
 
 	st := store.New(onExpire)
 
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		st.StartSweeper(ctx, time.Second)
-	})
+	var a *aof.AOF
+	if aofPath != "" {
+		var err error
+		a, err = aof.New(aofPath)
+		if err != nil {
+			log.Fatalf("failed to open AOF: %v", err)
+		}
+		defer a.Close()
+	}
 
-	srv := server.New(st)
+	srv := server.New(st, a)
+
+	if a != nil {
+		if err := a.Read(func(line string) {
+			srv.Dispatch(line)
+		}); err != nil {
+			log.Printf("aof replay error: %v", err)
+		}
+		log.Printf("replayed AOF from %s", aofPath)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		st.StartSweeper(ctx, time.Second)
+	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
