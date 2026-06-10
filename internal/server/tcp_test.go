@@ -15,7 +15,7 @@ import (
 func setupTest(t *testing.T) (*Server, context.CancelFunc) {
 	t.Helper()
 	_, cancel := context.WithCancel(context.Background())
-	s := store.New(nil)
+	s := store.New(10, nil)
 	return New(s, nil), cancel
 }
 
@@ -104,7 +104,7 @@ func TestDispatchSetWrongArgs(t *testing.T) {
 func TestFullTCPRoundTrip(t *testing.T) {
 	ctx := t.Context()
 
-	s := store.New(nil)
+	s := store.New(10, nil)
 	srv := New(s, nil)
 
 	// start on a random port
@@ -123,7 +123,7 @@ func TestFullTCPRoundTrip(t *testing.T) {
 				return
 			}
 			srv.wg.Add(1)
-			go srv.handleConnection(conn)
+			go srv.handleConnection(t.Context(), conn)
 		}
 	}()
 
@@ -154,12 +154,12 @@ func TestHandleConnectionExitsOnClose(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := store.New(nil)
+	s := store.New(10, nil)
 	srv := New(s, nil)
 
 	client, server := net.Pipe()
 	srv.wg.Add(1)
-	go srv.handleConnection(server)
+	go srv.handleConnection(t.Context(), server)
 
 	client.Close()
 	time.Sleep(50 * time.Millisecond)

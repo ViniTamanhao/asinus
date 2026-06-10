@@ -17,10 +17,11 @@ import (
 
 // Server holds a reference to the key-value store and manages TCP connections.
 type Server struct {
-	store    *store.Store
-	aof      *aof.AOF // nil if persistence is disabled
-	listener net.Listener
-	wg       sync.WaitGroup
+	store     *store.Store
+	aof       *aof.AOF // nil if persistence is disabled
+	listener  net.Listener
+	wg        sync.WaitGroup
+	replaying bool
 }
 
 // New creates a new Server backed by the given Store.
@@ -49,7 +50,7 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 			break
 		}
 		srv.wg.Add(1)
-		go srv.handleConnection(conn)
+		go srv.handleConnection(ctx, conn)
 	}
 
 	srv.wg.Wait()
@@ -58,9 +59,21 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 
 // handleConnection is run in its own goroutine per client.
 // It sends a welcome message and then closes the connection.
-func (srv *Server) handleConnection(conn net.Conn) {
+func (srv *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer srv.wg.Done()
 	defer conn.Close()
+
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Unblock the scanner by making any pending Read return immediately.
+			conn.SetReadDeadline(time.Now())
+		case <-done:
+		}
+	}()
 
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
@@ -74,6 +87,12 @@ func (srv *Server) handleConnection(conn net.Conn) {
 	if err := scanner.Err(); err != nil {
 		log.Printf("read error: %v", err)
 	}
+}
+
+// SetReplaying controls whether AOF writes are supressed.
+// Used during startup AOF replay to avoid self-deadlock.
+func (srv *Server) SetReplaying(v bool) {
+	srv.replaying = v
 }
 
 // Dispatch parses a single text command and executes it against the store;
@@ -114,7 +133,7 @@ func (srv *Server) Dispatch(line string) string {
 		}
 		srv.store.Set(key, value, ttl)
 
-		if srv.aof != nil {
+		if srv.aof != nil && !srv.replaying {
 			if err := srv.aof.Write(line); err != nil {
 				log.Printf("aof write error: %v", err)
 			}
@@ -127,7 +146,7 @@ func (srv *Server) Dispatch(line string) string {
 		}
 		srv.store.Delete(parts[1])
 
-		if srv.aof != nil {
+		if srv.aof != nil && !srv.replaying {
 			if err := srv.aof.Write(line); err != nil {
 				log.Printf("aof write error: %v", err)
 			}

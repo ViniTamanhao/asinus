@@ -18,10 +18,11 @@ import (
 )
 
 var (
-	port    string
-	webhook string
-	workers int
-	aofPath string
+	port          string
+	webhook       string
+	workers       int
+	aofPath       string
+	shardCapacity int
 )
 
 var rootCmd = &cobra.Command{
@@ -39,6 +40,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&webhook, "webhook", "w", "", "webhook to call on expire")
 	rootCmd.PersistentFlags().IntVarP(&workers, "workers", "j", 5, "number of workers")
 	rootCmd.PersistentFlags().StringVarP(&aofPath, "aof", "a", "", "AOF file path for persistence (empty = disabled)")
+	rootCmd.PersistentFlags().IntVarP(&shardCapacity, "shard-capacity", "c", 100, "max entries per shard before LRU eviction")
 }
 
 func run(cmd *cobra.Command, args []string) {
@@ -53,7 +55,7 @@ func run(cmd *cobra.Command, args []string) {
 		defer k.Wait()
 	}
 
-	st := store.New(onExpire)
+	st := store.New(shardCapacity, onExpire)
 
 	var a *aof.AOF
 	if aofPath != "" {
@@ -68,11 +70,13 @@ func run(cmd *cobra.Command, args []string) {
 	srv := server.New(st, a)
 
 	if a != nil {
+		srv.SetReplaying(true)
 		if err := a.Read(func(line string) {
 			srv.Dispatch(line)
 		}); err != nil {
 			log.Printf("aof replay error: %v", err)
 		}
+		srv.SetReplaying(false)
 		log.Printf("replayed AOF from %s", aofPath)
 	}
 
