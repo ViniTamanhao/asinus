@@ -52,7 +52,7 @@ func (k *Kicker) Start(ctx context.Context) {
 					if !ok {
 						return
 					}
-					k.post(evt)
+					k.post(ctx, evt)
 				}
 			}
 		}()
@@ -60,13 +60,21 @@ func (k *Kicker) Start(ctx context.Context) {
 }
 
 // post sends a single JSON POST request for an expiry event.
-func (k *Kicker) post(evt expiryEvent) {
+func (k *Kicker) post(ctx context.Context, evt expiryEvent) {
 	body, err := json.Marshal(evt)
 	if err != nil {
 		log.Printf("kicker: json marshal error: %v", err)
 		return
 	}
-	resp, err := k.client.Post(k.targetURL, "application/json", bytes.NewReader(body))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, k.targetURL, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("kicker: create request error: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := k.client.Do(req)
 	if err != nil {
 		log.Printf("kicker: post to %s failed for key %q: %v", k.targetURL, evt.Key, err)
 		return
@@ -85,8 +93,8 @@ func (k *Kicker) Fire(key, value string) {
 	}
 }
 
-// Wait blocks untill all workers have finished processing.
-// Call after cancelling the context during graceful shutdown.
+// Wait stops accepting new jobs and blocks until in-flight ones finish or the context is cancelled.
 func (k *Kicker) Wait() {
+	close(k.jobs)
 	k.wg.Wait()
 }
