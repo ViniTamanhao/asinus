@@ -8,7 +8,7 @@ import (
 )
 
 // entry holds the value and an optional expiry key.
-// A zero expiresAt means the keu never expires.
+// A zero expiresAt means the key never expires.
 type entry struct {
 	value     string
 	expiresAt time.Time
