@@ -107,6 +107,9 @@ func (srv *Server) Dispatch(line string) string {
 			if err != nil {
 				return "-ERR invalid TTL (must be integer seconds)"
 			}
+			if sec < 0 {
+				return "-ERR invalid TTL (must be positive)"
+			}
 			ttl = time.Duration(sec) * time.Second
 		}
 		srv.store.Set(key, value, ttl)
