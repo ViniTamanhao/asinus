@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
+	"io"
 	"sync"
 	"time"
 )
@@ -166,6 +168,35 @@ func (s *Store) Delete(key string) bool {
 	delete(sh.data, key)
 	sh.count--
 	return true
+}
+
+func (s *Store) Dump(w io.Writer) error {
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.RLock()
+		for _, node := range sh.data {
+			if !node.expiresAt.IsZero() && time.Now().After(node.expiresAt) {
+				continue
+			}
+			if node.expiresAt.IsZero() {
+				if _, err := fmt.Fprintf(w, "SET %s %s\n", node.key, node.value); err != nil {
+					sh.mu.RUnlock()
+					return err
+				}
+			} else {
+				ttl := int(time.Until(node.expiresAt).Seconds())
+				if ttl <= 0 {
+					continue
+				}
+				if _, err := fmt.Fprintf(w, "SET %s %s %d\n", node.key, node.value, ttl); err != nil {
+					sh.mu.RUnlock()
+					return err
+				}
+			}
+		}
+		sh.mu.RUnlock()
+	}
+	return nil
 }
 
 // StartSweeper runs a background loop that evicts expired keys at the given interval.

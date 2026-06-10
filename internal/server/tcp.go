@@ -44,6 +44,23 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 		srv.listener.Close()
 	}()
 
+	if srv.aof != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return 
+				case <-ticker.C:
+					if err := srv.aof.Rewrite(srv.store.Dump); err != nil {
+						log.Printf("aof rewrite error: %v", err)
+					}
+				}
+			}
+		}()
+	}
+
 	for {
 		conn, err := srv.listener.Accept()
 		if err != nil {
