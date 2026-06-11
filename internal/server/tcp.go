@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"asinus/internal/aof"
+	"asinus/internal/resp"
 	"asinus/internal/store"
 )
 
@@ -37,7 +39,7 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("kickback tcp server listening on :%s", port)
+	log.Printf("asinus tcp server listening on :%s", port)
 
 	go func() {
 		<-ctx.Done()
@@ -51,7 +53,7 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 			for {
 				select {
 				case <-ctx.Done():
-					return 
+					return
 				case <-ticker.C:
 					if err := srv.aof.Rewrite(srv.store.Dump); err != nil {
 						log.Printf("aof rewrite error: %v", err)
@@ -74,35 +76,36 @@ func (srv *Server) Start(ctx context.Context, port string) error {
 	return ctx.Err()
 }
 
-// handleConnection is run in its own goroutine per client.
-// It sends a welcome message and then closes the connection.
+// handleConnection reads RESP commands from conn, dispatches them, and writes RESP responses back.
+// Runs its own goroutine
 func (srv *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer srv.wg.Done()
 	defer conn.Close()
 
+	bw := bufio.NewWriter(conn)
+	r := resp.NewParser(conn)
+	w := resp.NewWriter(bw)
+
 	done := make(chan struct{})
+
 	defer close(done)
 
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Unblock the scanner by making any pending Read return immediately.
 			conn.SetReadDeadline(time.Now())
 		case <-done:
 		}
 	}()
 
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	for {
+		args, err := r.ReadCommand()
+		if err != nil {
+			return
 		}
-		reply := srv.Dispatch(line)
-		fmt.Fprintln(conn, reply)
-	}
-	if err := scanner.Err(); err != nil {
-		log.Printf("read error: %v", err)
+
+		srv.Dispatch(args, w)
+		bw.Flush()
 	}
 }
 
@@ -112,66 +115,78 @@ func (srv *Server) SetReplaying(v bool) {
 	srv.replaying = v
 }
 
-// Dispatch parses a single text command and executes it against the store;
-// Supported commands: GET, SET, DEL.
-func (srv *Server) Dispatch(line string) string {
-	parts := strings.Fields(line)
-	if len(parts) == 0 {
-		return "-ERR empty command"
+// Dispatch executes a parssed RESP command against the store and writes the RESP response to w.
+// It also persists write commands to the AOF.
+func (srv *Server) Dispatch(args []string, w *resp.Writer) {
+	if len(args) == 0 {
+		w.WriteError(errors.New("ERR empty command"))
+		return
 	}
 
-	cmd := strings.ToUpper(parts[0])
+	cmd := strings.ToUpper(args[0])
 	switch cmd {
 	case "GET":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments for GET"
+		if len(args) != 2 {
+			w.WriteError(errors.New("ERR wrong number of arguments for GET"))
+			return
 		}
-		val, ok := srv.store.Get(parts[1])
+		val, ok := srv.store.Get(args[1])
 		if !ok {
-			return "-ERR not found"
+			w.WriteBulk(nil)
+			return
 		}
-		return "+" + val
+		w.WriteBulk([]byte(val))
+
 	case "SET":
-		if len(parts) < 3 {
-			return "-ERR wrong number of arguments for SET"
+		if len(args) < 3 {
+			w.WriteError(errors.New("ERR wrong number of arguments for SET"))
+			return
 		}
-		key := parts[1]
-		value := parts[2]
+		key := args[1]
+		value := args[2]
 		var ttl time.Duration
-		if len(parts) >= 4 {
-			sec, err := strconv.Atoi(parts[3])
+		if len(args) >= 4 {
+			sec, err := strconv.Atoi(args[3])
 			if err != nil {
-				return "-ERR invalid TTL (must be integer seconds)"
+				w.WriteError(errors.New("ERR invalid TTL (must be integer seconds)"))
+				return
 			}
 			if sec < 0 {
-				return "-ERR invalid TTL (must be positive)"
+				w.WriteError(errors.New("ERR invalid TTL (must be positive))"))
+				return
 			}
 			ttl = time.Duration(sec) * time.Second
 		}
 		srv.store.Set(key, value, ttl)
 
 		if srv.aof != nil && !srv.replaying {
-			if err := srv.aof.Write(line); err != nil {
+			if err := srv.aof.Write(strings.Join(args, " ")); err != nil {
 				log.Printf("aof write error: %v", err)
 			}
 		}
 
-		return "+OK"
+		w.WriteSimpleString("OK")
+
 	case "DEL":
-		if len(parts) != 2 {
-			return "-ERR wrong number of arguments for DEL"
+		if len(args) != 2 {
+			w.WriteError(errors.New("ERR wrong number of arguments for DEL"))
+			return
 		}
-		srv.store.Delete(parts[1])
+		deleted := srv.store.Delete(args[1])
 
 		if srv.aof != nil && !srv.replaying {
-			if err := srv.aof.Write(line); err != nil {
+			if err := srv.aof.Write(strings.Join(args, " ")); err != nil {
 				log.Printf("aof write error: %v", err)
 			}
 		}
 
-		return "+OK"
+		if deleted {
+			w.WriteInt(1)
+		} else {
+			w.WriteInt(0)
+		}
 
 	default:
-		return fmt.Sprintf("-ERR unknown command %q", cmd)
+		w.WriteError(fmt.Errorf("ERR unknown command %q", cmd))
 	}
 }
