@@ -160,7 +160,7 @@ func (srv *Server) Dispatch(args []string, w *resp.Writer) {
 		srv.store.Set(key, value, ttl)
 
 		if srv.aof != nil && !srv.replaying {
-			if err := srv.aof.Write(strings.Join(args, " ")); err != nil {
+			if err := srv.aof.Write(resp.EncodeCommand(args)); err != nil {
 				log.Printf("aof write error: %v", err)
 			}
 		}
@@ -175,7 +175,7 @@ func (srv *Server) Dispatch(args []string, w *resp.Writer) {
 		deleted := srv.store.Delete(args[1])
 
 		if srv.aof != nil && !srv.replaying {
-			if err := srv.aof.Write(strings.Join(args, " ")); err != nil {
+			if err := srv.aof.Write(resp.EncodeCommand(args)); err != nil {
 				log.Printf("aof write error: %v", err)
 			}
 		}

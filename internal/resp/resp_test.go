@@ -127,3 +127,22 @@ func TestWriterInt(t *testing.T) {
 	}
 }
 
+func TestWriteArray(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+	if err := w.WriteArray([]string{"SET", "mykey", "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$5\r\nhello\r\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestEncodeCommand(t *testing.T) {
+	got := EncodeCommand([]string{"GET", "key"})
+	want := "*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n"
+	if string(got) != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

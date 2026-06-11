@@ -1,7 +1,8 @@
 package aof
 
 import (
-	"bufio"
+	"asinus/internal/resp"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -24,20 +25,21 @@ func New(path string) (*AOF, error) {
 	return &AOF{file: f, path: path}, nil
 }
 
-// Write appends a command line to the file and calls sync to flush.
-func (a *AOF) Write(cmd string) error {
+// Write appends a RESP-encoded command to the file and syncs it to disk.
+func (a *AOF) Write(cmd []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if _, err := a.file.WriteString(cmd + "\n"); err != nil {
+	if _, err := a.file.Write(cmd); err != nil {
 		return err
 	}
 	return a.file.Sync()
 }
 
-// Read relays the file from the beginning, passing each command line to fn.
-// Called once at startup to rebuild the store.
-func (a *AOF) Read(fn func(string)) error {
+// Read replays all persisted commands from the beginning of the file.
+// Each command is parsed from the RESP wire format and passed to fn.
+// CAlled once at startup to rebuild the store.
+func (a *AOF) Read(fn func([]string)) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -45,11 +47,17 @@ func (a *AOF) Read(fn func(string)) error {
 		return err
 	}
 
-	scanner := bufio.NewScanner(a.file)
-	for scanner.Scan() {
-		fn(scanner.Text())
+	parser := resp.NewParser(a.file)
+	for {
+		args, err := parser.ReadCommand()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		fn(args)
 	}
-	return scanner.Err()
 }
 
 // Rewrite rewrites the file with the contents of dumpFunc.

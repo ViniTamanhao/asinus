@@ -2,11 +2,14 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"hash/fnv"
 	"io"
+	"strconv"
 	"sync"
 	"time"
+
+	"asinus/internal/resp"
+
 )
 
 // entry holds the value and an optional expiry key.
@@ -171,6 +174,7 @@ func (s *Store) Delete(key string) bool {
 }
 
 func (s *Store) Dump(w io.Writer) error {
+	enc := resp.NewWriter(w)
 	for i := range s.shards {
 		sh := &s.shards[i]
 		sh.mu.RLock()
@@ -179,7 +183,7 @@ func (s *Store) Dump(w io.Writer) error {
 				continue
 			}
 			if node.expiresAt.IsZero() {
-				if _, err := fmt.Fprintf(w, "SET %s %s\n", node.key, node.value); err != nil {
+				if err := enc.WriteArray([]string{"SET", node.key, node.value}); err != nil {
 					sh.mu.RUnlock()
 					return err
 				}
@@ -188,7 +192,7 @@ func (s *Store) Dump(w io.Writer) error {
 				if ttl <= 0 {
 					continue
 				}
-				if _, err := fmt.Fprintf(w, "SET %s %s %d\n", node.key, node.value, ttl); err != nil {
+				if err := enc.WriteArray([]string{"SET", node.key, node.value, strconv.Itoa(ttl)}); err != nil {
 					sh.mu.RUnlock()
 					return err
 				}

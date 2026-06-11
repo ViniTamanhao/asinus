@@ -2,6 +2,7 @@ package resp
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -94,7 +95,7 @@ type Writer struct {
 	w io.Writer
 }
 
-// NewWriter creates a WRiter that writes to w.
+// NewWriter creates a Writer that writes to w.
 func NewWriter(w io.Writer) *Writer {
 	return &Writer{w: w}
 }
@@ -133,4 +134,26 @@ func (w *Writer) WriteBulk(b []byte) error {
 func (w *Writer) WriteInt(n int) error {
 	_, err := fmt.Fprintf(w.w, ":%d\r\n", n)
 	return err
+}
+
+// WriteArray writes a RESP Array header (*<n>\r\n) followed by n Bulk Strings.
+func (w *Writer) WriteArray(items []string) error {
+	if _, err := fmt.Fprintf(w.w, "*%d\r\n", len(items)); err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		if err := w.WriteBulk([]byte(item)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// EncodeCommand returns the RESP wire encoding of args as an Array of Bulk Strings.
+func EncodeCommand(args []string) []byte {
+	var buf bytes.Buffer
+	NewWriter(&buf).WriteArray(args)
+	return buf.Bytes()
 }

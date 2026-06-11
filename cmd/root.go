@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,10 +73,9 @@ func run(cmd *cobra.Command, args []string) {
 
 	if a != nil {
 		srv.SetReplaying(true)
-		if err := a.Read(func(line string) {
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				srv.Dispatch(parts, resp.NewWriter(io.Discard))
+		if err := a.Read(func(args []string) {
+			if len(args) > 0 {
+				srv.Dispatch(args, resp.NewWriter(io.Discard))
 			}
 		}); err != nil {
 			log.Printf("aof replay error: %v", err)
