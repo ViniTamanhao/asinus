@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"asinus/internal/aof"
 	"asinus/internal/kicker"
+	"asinus/internal/resp"
 	"asinus/internal/server"
 	"asinus/internal/store"
 
@@ -71,8 +73,10 @@ func run(cmd *cobra.Command, args []string) {
 
 	if a != nil {
 		srv.SetReplaying(true)
-		if err := a.Read(func(line string) {
-			srv.Dispatch(line)
+		if err := a.Read(func(args []string) {
+			if len(args) > 0 {
+				srv.Dispatch(args, resp.NewWriter(io.Discard))
+			}
 		}); err != nil {
 			log.Printf("aof replay error: %v", err)
 		}
