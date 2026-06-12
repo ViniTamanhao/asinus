@@ -1,0 +1,11 @@
+/*.md
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
+
+bin/
